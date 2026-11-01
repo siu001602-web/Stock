@@ -56,7 +56,8 @@ if "initialized" not in st.session_state:
         "이전순위": [999] * NUM_STOCKS,
         "응원남은턴": [0] * NUM_STOCKS,      
         "팀버프남은턴": [0] * NUM_STOCKS,
-        "공매도남은턴": [0] * NUM_STOCKS     
+        "공매도남은턴": [0] * NUM_STOCKS,
+        "파업남은턴": [0] * NUM_STOCKS     
     }).set_index("종목명")
     
     st.session_state.initialized = True
@@ -123,9 +124,8 @@ def update_game_state():
     survivors = stocks[~stocks["파산여부"]]
 
     # --- [글로벌 경제 위기 (블랙 먼데이) 이벤트] ---
-    # 생존 기업 수가 절반(100개) 이하일 때 5% 확률로 발생
     if total_survivors_count <= (NUM_STOCKS / 2) and np.random.rand() < 0.05:
-        current_turn_logs.append("🚨 [블랙 먼데이] 글로벌 금융 위기가 터졌습니다! 모든 생존 기업의 주가가 일제히 -30폭락하고 모든 버프가 소멸합니다!")
+        current_turn_logs.append("🚨 [블랙 먼데이] 글로벌 금융 위기가 터졌습니다! 모든 생존 기업의 주가가 일제히 -30% 폭락하고 모든 버프가 소멸합니다!")
         for symbol in survivors.index:
             old_price = stocks.loc[symbol, "현재가"]
             new_price = max(10, round(old_price * 0.7))
@@ -135,8 +135,18 @@ def update_game_state():
             stocks.loc[symbol, "응원남은턴"] = 0
             stocks.loc[symbol, "팀버프남은턴"] = 0
             stocks.loc[symbol, "공매도남은턴"] = 0
+            stocks.loc[symbol, "파업남은턴"] = 0
         st.session_state.event_logs = current_turn_logs
         return
+
+    # --- [해외 증시 연동 거시경제 환경 결정] ---
+    global_macro_bias = 0.0
+    if np.random.rand() < 0.4:
+        global_macro_bias = 0.08  # 해외 증시 훈풍 (+8%)
+        current_turn_logs.append("📈 [해외 증시 훈풍] 뉴욕 및 유럽 증시의 호조로 전체 시장에 온기가 감돌고 있습니다 (+8% 보정).")
+    elif np.random.rand() < 0.2:
+        global_macro_bias = -0.08 # 해외 증시 폭풍 (-8%)
+        current_turn_logs.append("📉 [해외 증시 폭풍] 글로벌 공급망 악재로 전체 시장에 찬바람이 붑니다 (-8% 보정).")
 
     # --- [랜덤 글로벌 이벤트 발생] ---
     if len(survivors) > 0:
@@ -184,6 +194,27 @@ def update_game_state():
             stocks.loc[bomb_target, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
             current_turn_logs.append(f"💣 [블록딜 폭탄] 대규모 블록딜 물량이 출하되어 [종합 {bomb_rank}위] [{bomb_target}]의 주가가 40% 폭락했습니다!")
 
+        # 5. 슈퍼 루키 탄생 (국부펀드 자사주 매입, 1% 확률): 하위권(100위 밖) 기업이 주가 2.5배 폭등
+        deep_low_survivors = survivors[survivors["이전순위"] > (NUM_STOCKS / 2)]
+        if not deep_low_survivors.empty and np.random.rand() < 0.01:
+            super_rookie = deep_low_survivors.sample(1).index[0]
+            rookie_rank = int(stocks.loc[super_rookie, "이전순위"])
+            old_price = stocks.loc[super_rookie, "현재가"]
+            new_price = round(old_price * 2.5)
+            stocks.loc[super_rookie, "현재가"] = new_price
+            initial = stocks.loc[super_rookie, "초인가"]
+            stocks.loc[super_rookie, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
+            current_turn_logs.append(f"🌟 [슈퍼 루키 탄생] 국부펀드가 [종합 {rookie_rank}위] [{super_rookie}]의 자사주를 대거 매입하여 주가가 2.5배 폭등했습니다!")
+
+        # 6. 노조 파업 및 경영권 분쟁 (1% 확률): TOP 20 이내 기업에 파업 발생 (2턴간 상승 제한)
+        top20_survivors = survivors[survivors["이전순위"] <= 20]
+        if not top20_survivors.empty and np.random.rand() < 0.01:
+            strike_target = top20_survivors.sample(1).index[0]
+            strike_rank = int(stocks.loc[strike_target, "이전순위"])
+            if stocks.loc[strike_target, "파업남은턴"] == 0:
+                stocks.loc[strike_target, "파업남은턴"] = 2
+                current_turn_logs.append(f"✊ [노조 파업 발생] [종합 {strike_rank}위] [{strike_target}] 내부 갈등 및 파업 발생! 2턴 동안 주가가 횡보/하락합니다.")
+
     # --- [각 기업별 턴 진행] ---
     for symbol in stocks.index:
         if stocks.loc[symbol, "파산여부"]:
@@ -195,6 +226,7 @@ def update_game_state():
         cheer_turns = stocks.loc[symbol, "응원남은턴"]
         team_buff_turns = stocks.loc[symbol, "팀버프남은턴"]
         short_turns = stocks.loc[symbol, "공매도남은턴"]
+        strike_turns = stocks.loc[symbol, "파업남은턴"]
         
         # 0.01% 확률로 갑작스러운 돌연 부도
         if np.random.rand() < 0.0001:
@@ -207,8 +239,11 @@ def update_game_state():
             stocks.loc[symbol, "팀"] = assigned_team
             current_turn_logs.append(f"🤝 [{symbol}] 이(가) {assigned_team} 동맹에 가입했습니다.")
 
-        # 가격 변동 범위 설정
-        if short_turns > 0:
+        # 가격 변동 범위 설정 (우선순위: 파업 > 공매도 > 팀버프 > 응원 > TOP10/LOW10 > 기본)
+        if strike_turns > 0:
+            min_rate, max_rate = -0.2, 0.05
+            stocks.loc[symbol, "파업남은턴"] -= 1
+        elif short_turns > 0:
             min_rate, max_rate = -0.6, -0.2
             stocks.loc[symbol, "공매도남은턴"] -= 1
         elif team_buff_turns > 0:
@@ -223,6 +258,10 @@ def update_game_state():
             min_rate, max_rate = -0.5, 1.0
         else:
             min_rate, max_rate = user_min_rate, user_max_rate
+            
+        # 글로벌 거시경제 바이어스 적용
+        min_rate = max(-1.0, min_rate + global_macro_bias)
+        max_rate = max(-1.0, max_rate + global_macro_bias)
             
         change_rate = np.random.uniform(min_rate, max_rate)
         
@@ -286,7 +325,7 @@ update_game_state()
 # 6. 화면 레이아웃 구성
 # ---------------------------------------------------------
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
-st.caption("⏱️ **10초마다** 시세 변동! (블랙 먼데이, 백기사 방어, 리얼 기업명 등 하드코어 시스템 활성화)")
+st.caption("⏱️ **10초마다** 시세 변동! (슈퍼 루키, 노조 파업, 해외증시 연동 등 종합 하드코어 시스템 활성화)")
 
 stocks_df = st.session_state.stocks
 total_survivors = len(stocks_df[~stocks_df['파산여부']])
@@ -332,7 +371,8 @@ with right_col:
         cheer_tag = "📣" if row["응원남은턴"] > 0 else ""
         tbuff_tag = "⚡" if row["팀버프남은턴"] > 0 else ""
         short_tag = "📉" if row["공매도남은턴"] > 0 else ""
-        st.write(f"**{idx}** {team_tag}{cheer_tag}{tbuff_tag}{short_tag}: {int(row['현재가']):,}원 (`+{row['변동률(%)']}%`)")
+        strike_tag = "✊" if row["파업남은턴"] > 0 else ""
+        st.write(f"**{idx}** {team_tag}{cheer_tag}{tbuff_tag}{short_tag}{strike_tag}: {int(row['현재가']):,}원 (`+{row['변동률(%)']}%`)")
         
     st.divider()
 
@@ -393,11 +433,12 @@ with left_col:
             cheer_badge = f"📣[응원: {row['응원남은턴']}턴]" if row["응원남은턴"] > 0 else ""
             tbuff_badge = f"⚡[팀버프: {row['팀버프남은턴']}턴]" if row["팀버프남은턴"] > 0 else ""
             short_badge = f"📉[공매도: {row['공매도남은턴']}턴]" if row["공매도남은턴"] > 0 else ""
+            strike_badge = f"✊[파업: {row['파업남은턴']}턴]" if row["파업남은턴"] > 0 else ""
             
             if row["파산여부"]:
                 info_text = f"~~{rank}위. {symbol}~~ | 💥 **부도 완료** | 보유: {row['보유수량']}주"
             else:
-                info_text = f"**{rank}위. {symbol}** {team_badge} {top10_badge} {low10_badge} {cheer_badge} {tbuff_badge} {short_badge} | **{int(row['현재가']):,}원** (`{row['변동률(%)']}%`) | 보유: {row['보유수량']}주"
+                info_text = f"**{rank}위. {symbol}** {team_badge} {top10_badge} {low10_badge} {cheer_badge} {tbuff_badge} {short_badge} {strike_badge} | **{int(row['현재가']):,}원** (`{row['변동률(%)']}%`) | 보유: {row['보유수량']}주"
                 
             c_info.markdown(info_text)
             
@@ -418,7 +459,7 @@ with left_col:
                             st.session_state.event_logs = [f"🛡️ [플레이어]의 [{symbol}] 대상 적대적 M&A 공격이 방어벽에 막혀 실패했습니다."]
                         st.rerun()
                     else:
-                        st.warning("부도권이 부족합니다! (사이드바에서 구매 가능)")
+                        st.warning("st.warning(부도권이 부족합니다! (사이드바에서 구매 가능))")
 
                 qty = c_qty.number_input("수량", min_value=1, value=1, key=f"q_{symbol}", label_visibility="collapsed")
                 
