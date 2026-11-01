@@ -45,7 +45,6 @@ if "initialized" not in st.session_state:
 st.sidebar.header("⚙️ 게임 난이도 및 확률 조절")
 st.sidebar.caption("실시간으로 주가 변동 폭을 조절할 수 있습니다.")
 
-# 슬라이더로 최대 하락률, 최대 상승률 조절 (기본값: -100% ~ +100%)
 user_min_rate = st.sidebar.slider("최대 하락률 (%)", min_value=-100, max_value=-10, value=-100, step=5) / 100.0
 user_max_rate = st.sidebar.slider("최대 상승률 (%)", min_value=10, max_value=200, value=100, step=5) / 100.0
 
@@ -58,10 +57,10 @@ st.sidebar.info("💡 팁: 슬라이더를 조절하여 게임 난이도를 실�
 def update_game_state():
     stocks = st.session_state.stocks
     
-    # 1. 이전 순위 계산 (상위 10위 혜택 부여용)
+    # 1. 이전 순위 계산 (현재가 기준 정렬 순위)
     rank_series = stocks["현재가"].rank(ascending=False, method="min")
     for symbol in stocks.index:
-        stocks.loc[symbol, "이전순위"] = rank_series[symbol]
+        stocks.loc[symbol, "이전순위"] = int(rank_series[symbol])
 
     teams = ["🔴 Red", "🔵 Blue", "🟡 Yellow"]
     
@@ -69,7 +68,8 @@ def update_game_state():
         if stocks.loc[symbol, "파산여부"]:
             continue
             
-        is_top10 = stocks.loc[symbol, "이전순위"] <= 10
+        current_rank = stocks.loc[symbol, "이전순위"]
+        is_top10 = current_rank <= 10
         cheer_turns = stocks.loc[symbol, "응원남은턴"]
         team_buff_turns = stocks.loc[symbol, "팀버프남은턴"]
         
@@ -78,7 +78,7 @@ def update_game_state():
             stocks.loc[symbol, "현재가"] = 0
             stocks.loc[symbol, "파산여부"] = True
             stocks.loc[symbol, "변동률(%)"] = -100.0
-            st.session_state.event_logs.append(f"💥 [{symbol}] 갑작스러운 자금난으로 돌연 부도 처리되었습니다.")
+            st.session_state.event_logs.append(f"💥 [종합 {current_rank}위] [{symbol}] 갑작스러운 자금난으로 돌연 부도 처리되었습니다.")
             continue
 
         # 0.1% 확률로 팀 결성/가입
@@ -108,7 +108,7 @@ def update_game_state():
             stocks.loc[symbol, "현재가"] = 0
             stocks.loc[symbol, "파산여부"] = True
             stocks.loc[symbol, "변동률(%)"] = -100.0
-            st.session_state.event_logs.append(f"💸 [{symbol}] 자본금 전액 소진으로 부도 처리되었습니다.")
+            st.session_state.event_logs.append(f"💸 [종합 {current_rank}위] [{symbol}] 자본금 전액 소진으로 부도 처리되었습니다.")
         else:
             stocks.loc[symbol, "현재가"] = round(new_price)
             initial = stocks.loc[symbol, "초인가"]
@@ -133,12 +133,13 @@ def update_game_state():
                 
             if not possible_targets.empty:
                 target = possible_targets.sort_values(by="현재가", ascending=False).iloc[0].name
+                target_rank = int(stocks.loc[target, "이전순위"])
                 
                 if np.random.rand() < 0.5:
                     stocks.loc[target, "현재가"] = 0
                     stocks.loc[target, "파산여부"] = True
                     stocks.loc[target, "변동률(%)"] = -100.0
-                    st.session_state.event_logs.append(f"⚔️ [{target}] 은(는) [{attacker_team if attacker_team != '무소속' else attacker}] 그룹의 공격을 받고 부도 되었습니다.")
+                    st.session_state.event_logs.append(f"⚔️ [종합 {target_rank}위] [{target}] 은(는) [{attacker_team if attacker_team != '무소속' else attacker}] 그룹의 공격을 받고 부도 되었습니다.")
                     
                     if attacker_team != "무소속":
                         team_members = stocks[(stocks["팀"] == attacker_team) & (~stocks["파산여부"])].index
