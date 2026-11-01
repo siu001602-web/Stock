@@ -91,10 +91,8 @@ if st.sidebar.button("💸 부도권 구매 (1,000,000원)"):
 def update_game_state():
     stocks = st.session_state.stocks
     
-    # 중복 순위 방지를 위해 method="first" 적용
+    # 중복 순위 방지 (method="first")
     rank_series = stocks["현재가"].rank(ascending=False, method="first")
-    total_survivors_count = len(stocks[~stocks["파산여부"]])
-    
     for symbol in stocks.index:
         stocks.loc[symbol, "이전순위"] = int(rank_series[symbol])
 
@@ -131,7 +129,7 @@ def update_game_state():
         elif is_top10:
             min_rate, max_rate = max(user_min_rate, -0.5), user_max_rate
         elif is_low10:
-            min_rate, max_rate = -0.5, 1.0  # 하위 10등 Low 종목 버프/너프 (-50% ~ +100%)
+            min_rate, max_rate = -0.5, 1.0  # 하위 10등 Low 종목 (-50% ~ +100%)
         else:
             min_rate, max_rate = user_min_rate, user_max_rate
             
@@ -147,16 +145,21 @@ def update_game_state():
             initial = stocks.loc[symbol, "초인가"]
             stocks.loc[symbol, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
 
-    # 자동 AI 간 M&A 공격 (기본 1% + 팀원 수당 1%)
+    # [동시다발적 M&A 공격 시스템]
+    # 생존한 모든 기업이 각각 독립적으로 공격 기회 판정
     survivors = stocks[~stocks["파산여부"]]
-    if len(survivors) > 1:
-        attacker = survivors.sample(1).index[0]
+    for attacker in survivors.index:
+        if stocks.loc[attacker, "파산여부"]:
+            continue
+            
         attacker_team = stocks.loc[attacker, "팀"]
         
+        # 공격 팀의 인원수 계산
         team_member_count = 0
         if attacker_team != "무소속":
             team_member_count = len(survivors[survivors["팀"] == attacker_team])
             
+        # 기본 1% + 팀원 수당 1% 확률
         attack_prob = 0.01 + (team_member_count * 0.01)
         
         if np.random.rand() < attack_prob:
@@ -165,27 +168,17 @@ def update_game_state():
                 possible_targets = possible_targets[possible_targets["팀"] != attacker_team]
                 
             if not possible_targets.empty:
+                # 타겟 선정 (자산 상위 종목 우선)
                 target = possible_targets.sort_values(by="현재가", ascending=False).iloc[0].name
                 
+                # 50% 확률로 공격 성공
                 if np.random.rand() < 0.5:
                     team_name_str = attacker_team if attacker_team != '무소속' else attacker
                     target_rank = int(stocks.loc[target, "이전순위"])
-                    stocks.loc[target, "현재가"] = 0
-                    stocks.loc[target, "파산여부"] = True
-                    stocks.loc[target, "변동률(%)"] = -100.0
-                    st.session_state.event_logs.append(f"⚔️ [종합 {target_rank}위] [{target}] 은(는) [{team_name_str}] 그룹의 공격을 받고 부도 되었습니다.")
                     
-                    # 물귀신 전략 발동 체크
-                    if np.random.rand() < 0.10:
-                        survivors_after = stocks[~stocks["파산여부"]]
-                        if not survivors_after.empty:
-                            dragged = survivors_after.sample(1).index[0]
-                            dragged_rank = int(stocks.loc[dragged, "이전순위"])
-                            stocks.loc[dragged, "현재가"] = 0
-                            stocks.loc[dragged, "파산여부"] = True
-                            stocks.loc[dragged, "변동률(%)"] = -100.0
-                            st.session_state.event_logs.append(f"👻 [물귀신 발동] [{target}]의 여파로 [종합 {dragged_rank}위] [{dragged}]이(가) 휘말려 동반 부도 처리되었습니다!")
-
+                    bankruptcy_company(target, f"[{team_name_str}] 그룹의 적대적 M&A 공격을 받고 부도 되었습니다.")
+                    
+                    # 공격 성공 팀 소속원 전체에게 3턴간 +1% ~ +100% 버프 부여
                     if attacker_team != "무소속":
                         team_members = stocks[(stocks["팀"] == attacker_team) & (~stocks["파산여부"])].index
                         stocks.loc[team_members, "팀버프남은턴"] = 3
@@ -201,7 +194,7 @@ update_game_state()
 # 6. 화면 레이아웃 구성
 # ---------------------------------------------------------
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
-st.caption(f"⏱️ **10초마다** 시세가 변동합니다. (하위 10개 Low 종목은 -50%~+100% 적용, 부도 시 10% 물귀신 발동)")
+st.caption(f"⏱️ **10초마다** 생존 기업들이 동시다발적으로 M&A 공격을 시도합니다! (하위 10개 Low 종목은 -50%~+100%, 부도 시 10% 물귀신 발동)")
 
 stocks_df = st.session_state.stocks
 total_stock_val = (stocks_df["현재가"] * stocks_df["보유수량"]).sum()
@@ -313,9 +306,8 @@ with left_col:
                 if c_attack.button("⚔️ 부도권", key=f"attack_{symbol}"):
                     if st.session_state.bankruptcy_tickets > 0:
                         st.session_state.bankruptcy_tickets -= 1
-                        target_rank = int(row["이전순위"])
                         if np.random.rand() < 0.5:
-                            bankruptcy_company(symbol, f"플레이어의 적대적 M&A 부도권 공격을 받아 부도 처리되었습니다.")
+                            bankruptcy_company(symbol, "플레이어의 적대적 M&A 부도권 공격을 받아 부도 처리되었습니다.")
                         else:
                             st.session_state.event_logs.append(f"🛡️ [플레이어]의 [{symbol}] 대상 적대적 M&A 공격이 방어벽에 막혀 실패했습니다.")
                         st.rerun()
