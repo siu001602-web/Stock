@@ -11,7 +11,7 @@ st.set_page_config(page_title="200개 종목 서바이벌 투자 시뮬레이션
 st_autorefresh(interval=10000, key="stock_survival_game_refresh")
 
 # ---------------------------------------------------------
-# 2. 세션 상태 (Session State) 초기화
+# 2. 세션 상태 (Session State) 초기화 및 200개 리얼 기업명 생성
 # ---------------------------------------------------------
 NUM_STOCKS = 200
 INITIAL_PRICE = 100000
@@ -22,7 +22,6 @@ if "initialized" not in st.session_state:
     st.session_state.event_logs = []  # 직전 턴 사건/사고 로그
     st.session_state.bankruptcy_tickets = 0  # 플레이어 보유 부도권 개수
     
-    # 팀별 부도 성공 횟수 기록용 딕셔너리
     st.session_state.team_bankruptcy_counts = {
         "🔴 Red": 0,
         "🔵 Blue": 0,
@@ -30,7 +29,23 @@ if "initialized" not in st.session_state:
         "플레이어": 0
     }
     
-    stock_names = [f"기업_{i+1:03d}" for i in range(NUM_STOCKS)]
+    # 200개의 다양한 한글 기업명 자동 조합 생성
+    prefixes = ["미래", "글로벌", "대한", "넥스트", "유니온", "에이펙스", "한성", "태양", "한국", "하이퍼", "코리아", "스마트", "비전", "누리", "대성"]
+    suffixes = ["전자", "바이오", "케미칼", "테크", "홀딩스", "에너지", "솔루션", "시스템", "디지털", "소프트", "인베스트", "물산", "통신", "제약", "로보틱스"]
+    
+    stock_names = []
+    for p in prefixes:
+        for s in suffixes:
+            stock_names.append(f"{p}{s}")
+    
+    # 정확히 200개 맞추기 (부족하면 번호 붙여서 보충)
+    stock_names = stock_names[:NUM_STOCKS]
+    if len(stock_names) < NUM_STOCKS:
+        for i in range(len(stock_names), NUM_STOCKS):
+            stock_names.append(f"한국기업_{i+1:03d}")
+            
+    # 이름 중복 제거 및 섞기
+    random.shuffle(stock_names)
     
     st.session_state.stocks = pd.DataFrame({
         "종목명": stock_names,
@@ -144,6 +159,17 @@ def update_game_state():
             stocks.loc[pension_saved, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
             current_turn_logs.append(f"💰 [국민연금 긴급투입] 바닥을 기던 [종합 {saved_rank}위] [{pension_saved}]에 자금이 수혈되어 주가가 2배(+100%) 폭등했습니다!")
 
+        # 4. 블록딜(시간외 대량매매) 폭탄 (2% 확률)
+        if len(survivors) >= 3 and np.random.rand() < 0.02:
+            bomb_target = survivors.sample(1).index[0]
+            bomb_rank = int(stocks.loc[bomb_target, "이전순위"])
+            old_price = stocks.loc[bomb_target, "현재가"]
+            new_price = max(10, round(old_price * 0.6)) # 40% 폭락
+            stocks.loc[bomb_target, "현재가"] = new_price
+            initial = stocks.loc[bomb_target, "초인가"]
+            stocks.loc[bomb_target, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
+            current_turn_logs.append(f"💣 [블록딜 폭탄] 대규모 블록딜 물량이 시장에 출하되어 [종합 {bomb_rank}위] [{bomb_target}]의 주가가 40% 폭락했습니다!")
+
     # --- [각 기업별 턴 진행] ---
     for symbol in stocks.index:
         if stocks.loc[symbol, "파산여부"]:
@@ -196,7 +222,7 @@ def update_game_state():
             initial = stocks.loc[symbol, "초인가"]
             stocks.loc[symbol, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
 
-    # --- [동시다발적 M&A 공격 시스템] ---
+    # --- [동시다발적 M&A 공격 및 백기사 방어 시스템] ---
     survivors = stocks[~stocks["파산여부"]]
     for attacker in survivors.index:
         if stocks.loc[attacker, "파산여부"]:
@@ -216,24 +242,28 @@ def update_game_state():
                 
             if not possible_targets.empty:
                 target = possible_targets.sort_values(by="현재가", ascending=False).iloc[0].name
+                target_rank = int(stocks.loc[target, "이전순위"])
                 
-                if np.random.rand() < 0.5:
-                    team_name_str = attacker_team if attacker_team != '무소속' else attacker
-                    bankruptcy_company(target, f"[{team_name_str}] 그룹의 공격을 받고 부도 되었습니다.", current_turn_logs)
-                    
-                    # 팀별 부도 성공 카운트 증가
-                    if attacker_team in st.session_state.team_bankruptcy_counts:
-                        st.session_state.team_bankruptcy_counts[attacker_team] += 1
-                    
-                    if attacker_team != "무소속":
-                        team_members = stocks[(stocks["팀"] == attacker_team) & (~stocks["파산여부"])].index
-                        stocks.loc[team_members, "팀버프남은턴"] = 3
-                        current_turn_logs.append(f"🎉 [{attacker_team}] 팀이 부도 공격에 성공하여 3턴간 팀원 전원 상승 버프(+1%~+100%)를 받습니다!")
-                    else:
-                        stocks.loc[attacker, "팀버프남은턴"] = 3
-                        current_turn_logs.append(f"🎉 [{attacker}] 기업이 부도 공격에 성공하여 3턴간 상승 버프(+1%~+100%)를 받습니다!")
+                # [백기사 시스템 연동] 플레이어가 타겟 기업의 주식을 보유 중이라면 백기사로 나서서 100% 방어!
+                if stocks.loc[target, "보유수량"] > 0:
+                    current_turn_logs.append(f"🛡️ [백기사 발동] 플레이어가 보유 중인 [{target}](종합 {target_rank}위)을(를) 보호하여 [{attacker}]의 적대적 M&A 공격을 완벽히 막아냈습니다!")
                 else:
-                    current_turn_logs.append(f"🛡️ [{attacker}] 의 [{target}] 대상 부도 공격이 방어에 막혀 실패했습니다.")
+                    if np.random.rand() < 0.5:
+                        team_name_str = attacker_team if attacker_team != '무소속' else attacker
+                        bankruptcy_company(target, f"[{team_name_str}] 그룹의 공격을 받고 부도 되었습니다.", current_turn_logs)
+                        
+                        if attacker_team in st.session_state.team_bankruptcy_counts:
+                            st.session_state.team_bankruptcy_counts[attacker_team] += 1
+                        
+                        if attacker_team != "무소속":
+                            team_members = stocks[(stocks["팀"] == attacker_team) & (~stocks["파산여부"])].index
+                            stocks.loc[team_members, "팀버프남은턴"] = 3
+                            current_turn_logs.append(f"🎉 [{attacker_team}] 팀이 부도 공격에 성공하여 3턴간 팀원 전원 상승 버프(+1%~+100%)를 받습니다!")
+                        else:
+                            stocks.loc[attacker, "팀버프남은턴"] = 3
+                            current_turn_logs.append(f"🎉 [{attacker}] 기업이 부도 공격에 성공하여 3턴간 상승 버프(+1%~+100%)를 받습니다!")
+                    else:
+                        current_turn_logs.append(f"🛡️ [{attacker}] 의 [{target}] 대상 부도 공격이 방어벽에 막혀 실패했습니다.")
 
     st.session_state.event_logs = current_turn_logs
 
@@ -243,7 +273,7 @@ update_game_state()
 # 6. 화면 레이아웃 구성
 # ---------------------------------------------------------
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
-st.caption("⏱️ **10초마다** 시세 변동! (팀별 M&A 파산 전과 및 당 턴 사건 로그 제공)")
+st.caption("⏱️ **10초마다** 시세 변동! (리얼 기업명, 백기사 방어, 블록딜 폭탄 등 하드코어 시스템 활성화)")
 
 stocks_df = st.session_state.stocks
 total_survivors = len(stocks_df[~stocks_df['파산여부']])
@@ -333,7 +363,7 @@ with left_col:
 
     st.write("")
 
-    search_term = st.text_input("🔍 종목 검색", placeholder="예: 기업_001")
+    search_term = st.text_input("🔍 종목 검색", placeholder="예: 미래전자")
     
     display_df = sorted_stocks
     if search_term:
