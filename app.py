@@ -19,8 +19,16 @@ INITIAL_CASH = 100000000  # 1억 원
 
 if "initialized" not in st.session_state:
     st.session_state.cash = INITIAL_CASH
-    st.session_state.event_logs = []  # 사건/사고 로그 기록용
+    st.session_state.event_logs = []  # 직전 턴 사건/사고 로그
     st.session_state.bankruptcy_tickets = 0  # 플레이어 보유 부도권 개수
+    
+    # 팀별 부도 성공 횟수 기록용 딕셔너리
+    st.session_state.team_bankruptcy_counts = {
+        "🔴 Red": 0,
+        "🔵 Blue": 0,
+        "🟡 Yellow": 0,
+        "플레이어": 0
+    }
     
     stock_names = [f"기업_{i+1:03d}" for i in range(NUM_STOCKS)]
     
@@ -43,7 +51,7 @@ if "initialized" not in st.session_state:
 # ---------------------------------------------------------
 # 3. 부도 처리 함수 (물귀신 전략 공통 적용)
 # ---------------------------------------------------------
-def bankruptcy_company(symbol, reason_msg):
+def bankruptcy_company(symbol, reason_msg, current_logs):
     stocks = st.session_state.stocks
     if stocks.loc[symbol, "파산여부"]:
         return
@@ -52,7 +60,7 @@ def bankruptcy_company(symbol, reason_msg):
     stocks.loc[symbol, "현재가"] = 0
     stocks.loc[symbol, "파산여부"] = True
     stocks.loc[symbol, "변동률(%)"] = -100.0
-    st.session_state.event_logs.append(f"💥 [종합 {current_rank}위] [{symbol}] {reason_msg}")
+    current_logs.append(f"💥 [종합 {current_rank}위] [{symbol}] {reason_msg}")
 
     # 물귀신 전략: 10% 확률로 다른 생존 기업 1개를 랜덤하게 같이 부도시킴
     survivors = stocks[~stocks["파산여부"]]
@@ -62,7 +70,7 @@ def bankruptcy_company(symbol, reason_msg):
         stocks.loc[dragged_symbol, "현재가"] = 0
         stocks.loc[dragged_symbol, "파산여부"] = True
         stocks.loc[dragged_symbol, "변동률(%)"] = -100.0
-        st.session_state.event_logs.append(f"👻 [물귀신 발동] [{symbol}]의 여파로 [종합 {dragged_rank}위] [{dragged_symbol}]이(가) 휘말려 동반 부도 처리되었습니다!")
+        current_logs.append(f"👻 [물귀신 발동] [{symbol}]의 여파로 [종합 {dragged_rank}위] [{dragged_symbol}]이(가) 휘말려 동반 부도 처리되었습니다!")
 
 # ---------------------------------------------------------
 # 4. 사이드바: 게임 난이도 조절 및 플레이어 부도권 관리 패널
@@ -91,8 +99,8 @@ if st.sidebar.button("💸 부도권 구매 (1,000,000원)"):
 # ---------------------------------------------------------
 def update_game_state():
     stocks = st.session_state.stocks
+    current_turn_logs = []
     
-    # 중복 순위 방지 (method="first")
     rank_series = stocks["현재가"].rank(ascending=False, method="first")
     for symbol in stocks.index:
         stocks.loc[symbol, "이전순위"] = int(rank_series[symbol])
@@ -103,16 +111,16 @@ def update_game_state():
 
     # --- [랜덤 글로벌 이벤트 발생] ---
     if len(survivors) > 0:
-        # 1. 공매도 세력의 습격 (2% 확률): TOP 5 우량 기업 중 1곳 타겟
+        # 1. 공매도 세력의 습격 (2% 확률)
         if len(survivors) >= 5 and np.random.rand() < 0.02:
             top5_survivors = survivors.sort_values(by="현재가", ascending=False).head(5)
             victim = top5_survivors.sample(1).index[0]
             if stocks.loc[victim, "공매도남은턴"] == 0:
                 victim_rank = int(stocks.loc[victim, "이전순위"])
                 stocks.loc[victim, "공매도남은턴"] = 3
-                st.session_state.event_logs.append(f"📉 [공매도 습격] [종합 {victim_rank}위] [{victim}]이(가) 공매도의 집중 공격을 받아 3턴간 하락 압력(-60%~-20%)을 받습니다!")
+                current_turn_logs.append(f"📉 [공매도 습격] [종합 {victim_rank}위] [{victim}]이(가) 공매도의 집중 공격을 받아 3턴간 하락 압력(-60%~-20%)을 받습니다!")
 
-        # 2. 대형 회계 감사 스캔들 (1% 확률): 무작위 기업 주가 -50% 및 팀 퇴출
+        # 2. 대형 회계 감사 스캔들 (1% 확률)
         if np.random.rand() < 0.01:
             scandal_victim = survivors.sample(1).index[0]
             victim_rank = int(stocks.loc[scandal_victim, "이전순위"])
@@ -122,9 +130,9 @@ def update_game_state():
             stocks.loc[scandal_victim, "팀"] = "무소속"
             initial = stocks.loc[scandal_victim, "초인가"]
             stocks.loc[scandal_victim, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
-            st.session_state.event_logs.append(f"🚨 [회계 스캔들] [종합 {victim_rank}위] [{scandal_victim}] 분식 회계 적발! 주가 반토막(-50%) 및 팀 강제 퇴출(무소속) 처분되었습니다.")
+            current_turn_logs.append(f"🚨 [회계 스캔들] [종합 {victim_rank}위] [{scandal_victim}] 분식 회계 적발! 주가 반토막(-50%) 및 팀 강제 퇴출(무소속) 처분되었습니다.")
 
-        # 3. 국민연금 긴급 투입 (1% 확률): 하위 10위권(Low 종목) 중 1곳 주가 2배 폭등
+        # 3. 국민연금 긴급 투입 (1% 확률)
         low_survivors = survivors[survivors["이전순위"] >= (NUM_STOCKS - 9)]
         if not low_survivors.empty and np.random.rand() < 0.01:
             pension_saved = low_survivors.sample(1).index[0]
@@ -134,7 +142,7 @@ def update_game_state():
             stocks.loc[pension_saved, "현재가"] = new_price
             initial = stocks.loc[pension_saved, "초인가"]
             stocks.loc[pension_saved, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
-            st.session_state.event_logs.append(f"💰 [국민연금 긴급투입] 바닥을 기던 [종합 {saved_rank}위] [{pension_saved}]에 자금이 수혈되어 주가가 2배(+100%) 폭등했습니다!")
+            current_turn_logs.append(f"💰 [국민연금 긴급투입] 바닥을 기던 [종합 {saved_rank}위] [{pension_saved}]에 자금이 수혈되어 주가가 2배(+100%) 폭등했습니다!")
 
     # --- [각 기업별 턴 진행] ---
     for symbol in stocks.index:
@@ -150,16 +158,16 @@ def update_game_state():
         
         # 0.01% 확률로 갑작스러운 돌연 부도
         if np.random.rand() < 0.0001:
-            bankruptcy_company(symbol, "갑작스러운 자금난으로 돌연 부도 처리되었습니다.")
+            bankruptcy_company(symbol, "갑작스러운 자금난으로 돌연 부도 처리되었습니다.", current_turn_logs)
             continue
 
-        # 팀 결성/가입 (확률 0.5%로 상향)
+        # 팀 가입 (확률 0.5%)
         if stocks.loc[symbol, "팀"] == "무소속" and np.random.rand() < 0.005:
             assigned_team = random.choice(teams)
             stocks.loc[symbol, "팀"] = assigned_team
-            st.session_state.event_logs.append(f"🤝 [{symbol}] 이(가) {assigned_team} 동맹에 가입했습니다.")
+            current_turn_logs.append(f"🤝 [{symbol}] 이(가) {assigned_team} 동맹에 가입했습니다.")
 
-        # 가격 변동 범위 설정 (우선순위: 공매도 > 팀버프 > 응원 > TOP10/LOW10 > 기본)
+        # 가격 변동 범위 설정
         if short_turns > 0:
             min_rate, max_rate = -0.6, -0.2
             stocks.loc[symbol, "공매도남은턴"] -= 1
@@ -182,7 +190,7 @@ def update_game_state():
         new_price = current_price * (1.0 + change_rate)
         
         if new_price <= 0:
-            bankruptcy_company(symbol, "자본금 전액 소진으로 부도 처리되었습니다.")
+            bankruptcy_company(symbol, "자본금 전액 소진으로 부도 처리되었습니다.", current_turn_logs)
         else:
             stocks.loc[symbol, "현재가"] = round(new_price)
             initial = stocks.loc[symbol, "초인가"]
@@ -211,17 +219,23 @@ def update_game_state():
                 
                 if np.random.rand() < 0.5:
                     team_name_str = attacker_team if attacker_team != '무소속' else attacker
-                    bankruptcy_company(target, f"[{team_name_str}] 그룹의 공격을 받고 부도 되었습니다.")
+                    bankruptcy_company(target, f"[{team_name_str}] 그룹의 공격을 받고 부도 되었습니다.", current_turn_logs)
+                    
+                    # 팀별 부도 성공 카운트 증가
+                    if attacker_team in st.session_state.team_bankruptcy_counts:
+                        st.session_state.team_bankruptcy_counts[attacker_team] += 1
                     
                     if attacker_team != "무소속":
                         team_members = stocks[(stocks["팀"] == attacker_team) & (~stocks["파산여부"])].index
                         stocks.loc[team_members, "팀버프남은턴"] = 3
-                        st.session_state.event_logs.append(f"🎉 [{attacker_team}] 팀이 부도 공격에 성공하여 3턴간 팀원 전원 상승 버프(+1%~+100%)를 받습니다!")
+                        current_turn_logs.append(f"🎉 [{attacker_team}] 팀이 부도 공격에 성공하여 3턴간 팀원 전원 상승 버프(+1%~+100%)를 받습니다!")
                     else:
                         stocks.loc[attacker, "팀버프남은턴"] = 3
-                        st.session_state.event_logs.append(f"🎉 [{attacker}] 기업이 부도 공격에 성공하여 3턴간 상승 버프(+1%~+100%)를 받습니다!")
+                        current_turn_logs.append(f"🎉 [{attacker}] 기업이 부도 공격에 성공하여 3턴간 상승 버프(+1%~+100%)를 받습니다!")
                 else:
-                    st.session_state.event_logs.append(f"🛡️ [{attacker}] 의 [{target}] 대상 부도 공격이 방어에 막혀 실패했습니다.")
+                    current_turn_logs.append(f"🛡️ [{attacker}] 의 [{target}] 대상 부도 공격이 방어에 막혀 실패했습니다.")
+
+    st.session_state.event_logs = current_turn_logs
 
 update_game_state()
 
@@ -229,7 +243,7 @@ update_game_state()
 # 6. 화면 레이아웃 구성
 # ---------------------------------------------------------
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
-st.caption(f"⏱️ **10초마다** 시세 변동! (공매도, 회계감사, 국민연금 등 다양한 변수 활성화)")
+st.caption("⏱️ **10초마다** 시세 변동! (팀별 M&A 파산 전과 및 당 턴 사건 로그 제공)")
 
 stocks_df = st.session_state.stocks
 total_survivors = len(stocks_df[~stocks_df['파산여부']])
@@ -247,7 +261,7 @@ st.divider()
 left_col, right_col = st.columns([3, 1])
 
 # ---------------------------------------------------------
-# [우측 컬럼] 팀 현황, TOP 5, 사건 로그
+# [우측 컬럼] 팀 현황, 부도 전과 랭킹, TOP 5, 사건 로그
 # ---------------------------------------------------------
 with right_col:
     st.subheader("🛡️ 팀별 생존 현황")
@@ -262,6 +276,12 @@ with right_col:
             
     st.divider()
 
+    st.subheader("🏆 팀별 M&A 부도 전과")
+    for team, count in st.session_state.team_bankruptcy_counts.items():
+        st.write(f"- **{team}**: 파산시킨 기업 **{count}개**")
+
+    st.divider()
+
     st.subheader("🔥 상승률 TOP 5")
     top_5_up = stocks_df[~stocks_df["파산여부"]].sort_values(by="변동률(%)", ascending=False).head(5)
     for idx, row in top_5_up.iterrows():
@@ -273,11 +293,14 @@ with right_col:
         
     st.divider()
 
-    st.subheader("📜 사건/사고 로그")
+    st.subheader("📜 이번 턴 사건/사고 로그")
     log_container = st.container(height=250)
     with log_container:
-        for log in reversed(st.session_state.event_logs):
-            st.text(log)
+        if st.session_state.event_logs:
+            for log in st.session_state.event_logs:
+                st.text(log)
+        else:
+            st.text("이번 턴에 발생한 특이 사건/사고가 없습니다.")
 
 # ---------------------------------------------------------
 # [좌측 컬럼] 주식 랭킹 순 표출 및 응원 / 매매 / 부도권 공격 시스템
@@ -338,16 +361,18 @@ with left_col:
             if not row["파산여부"]:
                 if c_cheer.button("📣 응원", key=f"cheer_{symbol}"):
                     st.session_state.stocks.loc[symbol, "응원남은턴"] = 3
-                    st.session_state.event_logs.append(f"🙌 [{symbol}] 이(가) 응원을 받아 3턴 동안 버프(-30%~+150%)가 적용됩니다!")
+                    st.session_state.event_logs = [f"🙌 [{symbol}] 이(가) 응원을 받아 3턴 동안 버프(-30%~+150%)가 적용됩니다!"]
                     st.rerun()
 
                 if c_attack.button("⚔️ 부도권", key=f"attack_{symbol}"):
                     if st.session_state.bankruptcy_tickets > 0:
                         st.session_state.bankruptcy_tickets -= 1
                         if np.random.rand() < 0.5:
-                            bankruptcy_company(symbol, "플레이어의 적대적 M&A 부도권 공격을 받아 부도 처리되었습니다.")
+                            st.session_state.event_logs = []
+                            bankruptcy_company(symbol, "플레이어의 적대적 M&A 부도권 공격을 받아 부도 처리되었습니다.", st.session_state.event_logs)
+                            st.session_state.team_bankruptcy_counts["플레이어"] += 1
                         else:
-                            st.session_state.event_logs.append(f"🛡️ [플레이어]의 [{symbol}] 대상 적대적 M&A 공격이 방어벽에 막혀 실패했습니다.")
+                            st.session_state.event_logs = [f"🛡️ [플레이어]의 [{symbol}] 대상 적대적 M&A 공격이 방어벽에 막혀 실패했습니다."]
                         st.rerun()
                     else:
                         st.warning("부도권이 부족합니다! (사이드바에서 구매 가능)")
