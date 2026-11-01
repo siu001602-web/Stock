@@ -37,14 +37,12 @@ if "initialized" not in st.session_state:
     for p in prefixes:
         for s in suffixes:
             stock_names.append(f"{p}{s}")
-    
-    # 정확히 200개 맞추기 (부족하면 번호 붙여서 보충)
+            
     stock_names = stock_names[:NUM_STOCKS]
     if len(stock_names) < NUM_STOCKS:
         for i in range(len(stock_names), NUM_STOCKS):
             stock_names.append(f"한국기업_{i+1:03d}")
             
-    # 이름 중복 제거 및 섞기
     random.shuffle(stock_names)
     
     st.session_state.stocks = pd.DataFrame({
@@ -124,6 +122,22 @@ def update_game_state():
     total_survivors_count = len(stocks[~stocks["파산여부"]])
     survivors = stocks[~stocks["파산여부"]]
 
+    # --- [글로벌 경제 위기 (블랙 먼데이) 이벤트] ---
+    # 생존 기업 수가 절반(100개) 이하일 때 5% 확률로 발생
+    if total_survivors_count <= (NUM_STOCKS / 2) and np.random.rand() < 0.05:
+        current_turn_logs.append("🚨 [블랙 먼데이] 글로벌 금융 위기가 터졌습니다! 모든 생존 기업의 주가가 일제히 -30폭락하고 모든 버프가 소멸합니다!")
+        for symbol in survivors.index:
+            old_price = stocks.loc[symbol, "현재가"]
+            new_price = max(10, round(old_price * 0.7))
+            stocks.loc[symbol, "현재가"] = new_price
+            initial = stocks.loc[symbol, "초인가"]
+            stocks.loc[symbol, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
+            stocks.loc[symbol, "응원남은턴"] = 0
+            stocks.loc[symbol, "팀버프남은턴"] = 0
+            stocks.loc[symbol, "공매도남은턴"] = 0
+        st.session_state.event_logs = current_turn_logs
+        return
+
     # --- [랜덤 글로벌 이벤트 발생] ---
     if len(survivors) > 0:
         # 1. 공매도 세력의 습격 (2% 확률)
@@ -159,16 +173,16 @@ def update_game_state():
             stocks.loc[pension_saved, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
             current_turn_logs.append(f"💰 [국민연금 긴급투입] 바닥을 기던 [종합 {saved_rank}위] [{pension_saved}]에 자금이 수혈되어 주가가 2배(+100%) 폭등했습니다!")
 
-        # 4. 블록딜(시간외 대량매매) 폭탄 (2% 확률)
+        # 4. 블록딜 폭탄 (2% 확률)
         if len(survivors) >= 3 and np.random.rand() < 0.02:
             bomb_target = survivors.sample(1).index[0]
             bomb_rank = int(stocks.loc[bomb_target, "이전순위"])
             old_price = stocks.loc[bomb_target, "현재가"]
-            new_price = max(10, round(old_price * 0.6)) # 40% 폭락
+            new_price = max(10, round(old_price * 0.6))
             stocks.loc[bomb_target, "현재가"] = new_price
             initial = stocks.loc[bomb_target, "초인가"]
             stocks.loc[bomb_target, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
-            current_turn_logs.append(f"💣 [블록딜 폭탄] 대규모 블록딜 물량이 시장에 출하되어 [종합 {bomb_rank}위] [{bomb_target}]의 주가가 40% 폭락했습니다!")
+            current_turn_logs.append(f"💣 [블록딜 폭탄] 대규모 블록딜 물량이 출하되어 [종합 {bomb_rank}위] [{bomb_target}]의 주가가 40% 폭락했습니다!")
 
     # --- [각 기업별 턴 진행] ---
     for symbol in stocks.index:
@@ -244,7 +258,6 @@ def update_game_state():
                 target = possible_targets.sort_values(by="현재가", ascending=False).iloc[0].name
                 target_rank = int(stocks.loc[target, "이전순위"])
                 
-                # [백기사 시스템 연동] 플레이어가 타겟 기업의 주식을 보유 중이라면 백기사로 나서서 100% 방어!
                 if stocks.loc[target, "보유수량"] > 0:
                     current_turn_logs.append(f"🛡️ [백기사 발동] 플레이어가 보유 중인 [{target}](종합 {target_rank}위)을(를) 보호하여 [{attacker}]의 적대적 M&A 공격을 완벽히 막아냈습니다!")
                 else:
@@ -273,7 +286,7 @@ update_game_state()
 # 6. 화면 레이아웃 구성
 # ---------------------------------------------------------
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
-st.caption("⏱️ **10초마다** 시세 변동! (리얼 기업명, 백기사 방어, 블록딜 폭탄 등 하드코어 시스템 활성화)")
+st.caption("⏱️ **10초마다** 시세 변동! (블랙 먼데이, 백기사 방어, 리얼 기업명 등 하드코어 시스템 활성화)")
 
 stocks_df = st.session_state.stocks
 total_survivors = len(stocks_df[~stocks_df['파산여부']])
