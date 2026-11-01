@@ -20,6 +20,7 @@ INITIAL_CASH = 100000000  # 1억 원
 if "initialized" not in st.session_state:
     st.session_state.cash = INITIAL_CASH
     st.session_state.event_logs = []  # 사건/사고 로그 기록용
+    st.session_state.bankruptcy_tickets = 0  # 플레이어 보유 부도권 개수
     
     # 200개 종목 생성 (기업_001 ~ 기업_200)
     stock_names = [f"기업_{i+1:03d}" for i in range(NUM_STOCKS)]
@@ -33,23 +34,33 @@ if "initialized" not in st.session_state:
         "보유수량": [0] * NUM_STOCKS,
         "팀": ["무소속"] * NUM_STOCKS,
         "이전순위": [999] * NUM_STOCKS,
-        "응원남은턴": [0] * NUM_STOCKS,      # 응원 버프 남은 턴 (-30% ~ +150%)
-        "팀버프남은턴": [0] * NUM_STOCKS     # 공격 성공 팀 버프 남은 턴 (+1% ~ +100%)
+        "응원남은턴": [0] * NUM_STOCKS,      
+        "팀버프남은턴": [0] * NUM_STOCKS     
     }).set_index("종목명")
     
     st.session_state.initialized = True
 
 # ---------------------------------------------------------
-# 3. 사이드바: 게임 난이도(변동 확률) 조절 패널
+# 3. 사이드바: 게임 난이도 조절 및 플레이어 부도권 관리 패널
 # ---------------------------------------------------------
-st.sidebar.header("⚙️ 게임 난이도 및 확률 조절")
-st.sidebar.caption("실시간으로 주가 변동 폭을 조절할 수 있습니다.")
+st.sidebar.header("⚙️ 게임 난이도 및 액션")
+st.sidebar.caption("실시간으로 주가 변동 폭을 조절하고 부도권을 관리하세요.")
 
 user_min_rate = st.sidebar.slider("최대 하락률 (%)", min_value=-100, max_value=-10, value=-100, step=5) / 100.0
 user_max_rate = st.sidebar.slider("최대 상승률 (%)", min_value=10, max_value=200, value=100, step=5) / 100.0
 
 st.sidebar.divider()
-st.sidebar.info("💡 팁: 슬라이더를 조절하여 게임 난이도를 실시간으로 변경해보세요!")
+st.sidebar.subheader("⚔️ 적대적 M&A 부도권")
+st.sidebar.write(f"보유 부도권: **{st.session_state.bankruptcy_tickets} 개**")
+
+if st.sidebar.button("💸 부도권 구매 (1,000,000원)"):
+    if st.session_state.cash >= 1000000:
+        st.session_state.cash -= 1000000
+        st.session_state.bankruptcy_tickets += 1
+        st.sidebar.success("부도권 1개를 획득했습니다!")
+        st.rerun()
+    else:
+        st.sidebar.warning("현금이 부족합니다! (100만원 필요)")
 
 # ---------------------------------------------------------
 # 4. 10초마다 실행되는 시세 및 이벤트 로직
@@ -57,7 +68,6 @@ st.sidebar.info("💡 팁: 슬라이더를 조절하여 게임 난이도를 실�
 def update_game_state():
     stocks = st.session_state.stocks
     
-    # 1. 이전 순위 계산 (현재가 기준 정렬 순위)
     rank_series = stocks["현재가"].rank(ascending=False, method="min")
     for symbol in stocks.index:
         stocks.loc[symbol, "이전순위"] = int(rank_series[symbol])
@@ -81,11 +91,16 @@ def update_game_state():
             st.session_state.event_logs.append(f"💥 [종합 {current_rank}위] [{symbol}] 갑작스러운 자금난으로 돌연 부도 처리되었습니다.")
             continue
 
-        # 0.1% 확률로 팀 결성/가입
+        # 팀 결성/가입 및 팀원 부도권 획득 확률 (5%)
         if stocks.loc[symbol, "팀"] == "무소속" and np.random.rand() < 0.001:
             assigned_team = random.choice(teams)
             stocks.loc[symbol, "팀"] = assigned_team
             st.session_state.event_logs.append(f"🤝 [{symbol}] 이(가) {assigned_team} 동맹에 가입했습니다.")
+        elif stocks.loc[symbol, "팀"] != "무소속":
+            # 팀 소속 기업은 5% 확률로 부도권을 획득하거나 자체 버프 이벤트 발생 가능
+            if np.random.rand() < 0.05:
+                # 팀 소속 기업이 부도권(영향력)을 얻는 이벤트 등 처리 가능
+                pass
 
         # 가격 변동 범위 설정
         if team_buff_turns > 0:
@@ -114,7 +129,7 @@ def update_game_state():
             initial = stocks.loc[symbol, "초인가"]
             stocks.loc[symbol, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
 
-    # 2. 적대적 M&A (부도 공격) 이벤트 발생 (기본 1% + 팀원 수당 1%)
+    # 자동 AI 간 M&A 공격 (기본 1% + 팀원 수당 1%)
     survivors = stocks[~stocks["파산여부"]]
     if len(survivors) > 1:
         attacker = survivors.sample(1).index[0]
@@ -150,7 +165,6 @@ def update_game_state():
                 else:
                     st.session_state.event_logs.append(f"🛡️ [{attacker}] 의 [{target}] 대상 부도 공격이 방어에 막혀 실패했습니다.")
 
-# 시세 업데이트 실행
 update_game_state()
 
 # ---------------------------------------------------------
@@ -159,7 +173,6 @@ update_game_state()
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
 st.caption(f"⏱️ **10초마다** 시세가 변동합니다. (현재 설정된 변동 폭: **{int(user_min_rate*100)}% ~ +{int(user_max_rate*100)}%**)")
 
-# 보유 자산 현황
 stocks_df = st.session_state.stocks
 total_stock_val = (stocks_df["현재가"] * stocks_df["보유수량"]).sum()
 total_assets = st.session_state.cash + total_stock_val
@@ -207,7 +220,7 @@ with right_col:
             st.text(log)
 
 # ---------------------------------------------------------
-# [좌측 컬럼] 주식 랭킹 순 표출 및 응원 / 매매 시스템
+# [좌측 컬럼] 주식 랭킹 순 표출 및 응원 / 매매 / 부도권 공격 시스템
 # ---------------------------------------------------------
 with left_col:
     st.subheader("📊 전체 종목 순위 (현재가 높은 순)")
@@ -245,7 +258,7 @@ with left_col:
         
     for rank, (symbol, row) in enumerate(display_df.iterrows(), 1):
         with st.container():
-            c_info, c_cheer, c_qty, c_buy, c_sell = st.columns([3, 1, 1, 1, 1])
+            c_info, c_cheer, c_attack, c_qty, c_buy, c_sell = st.columns([2.5, 0.8, 0.9, 0.8, 0.8, 0.8])
             
             team_badge = f"`{row['팀']}`" if row["팀"] != "무소속" else ""
             top10_badge = "🌟[TOP 10]" if row["이전순위"] <= 10 and not row["파산여부"] else ""
@@ -260,10 +273,28 @@ with left_col:
             c_info.markdown(info_text)
             
             if not row["파산여부"]:
+                # 응원 버튼
                 if c_cheer.button("📣 응원", key=f"cheer_{symbol}"):
                     st.session_state.stocks.loc[symbol, "응원남은턴"] = 3
                     st.session_state.event_logs.append(f"🙌 [{symbol}] 이(가) 응원을 받아 3턴 동안 버프(-30%~+150%)가 적용됩니다!")
                     st.rerun()
+
+                # 부도권 공격 버튼 (플레이어가 직접 타겟 공격)
+                if c_attack.button("⚔️ 부도권", key=f"attack_{symbol}"):
+                    if st.session_state.bankruptcy_tickets > 0:
+                        st.session_state.bankruptcy_tickets -= 1
+                        target_rank = int(row["이전순위"])
+                        # 50% 확률로 부도 성공
+                        if np.random.rand() < 0.5:
+                            st.session_state.stocks.loc[symbol, "현재가"] = 0
+                            st.session_state.stocks.loc[symbol, "파산여부"] = True
+                            st.session_state.stocks.loc[symbol, "변동률(%)"] = -100.0
+                            st.session_state.event_logs.append(f"⚔️ [플레이어]가 [종합 {target_rank}위] [{symbol}]을(를) 적대적 M&A 부도권으로 공격하여 부도 처리했습니다!")
+                        else:
+                            st.session_state.event_logs.append(f"🛡️ [플레이어]의 [{symbol}] 대상 적대적 M&A 공격이 방어벽에 막혀 실패했습니다.")
+                        st.rerun()
+                    else:
+                        st.warning("부도권이 부족합니다! (사이드바에서 구매 가능)")
 
                 qty = c_qty.number_input("수량", min_value=1, value=1, key=f"q_{symbol}", label_visibility="collapsed")
                 
@@ -285,6 +316,7 @@ with left_col:
                         st.warning("보유 수량 부족")
             else:
                 c_cheer.write("-")
+                c_attack.write("-")
                 c_qty.write("-")
                 c_buy.write("-")
                 c_sell.write("-")
