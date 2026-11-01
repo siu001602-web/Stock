@@ -45,12 +45,12 @@ if "initialized" not in st.session_state:
 st.sidebar.header("⚙️ 게임 난이도 및 확률 조절")
 st.sidebar.caption("실시간으로 주가 변동 폭을 조절할 수 있습니다.")
 
-# 슬라이더로 최대 하락률, 최대 상승률 조절 (기본값: 하락 -100%, 상승 +50%)
+# 슬라이더로 최대 하락률, 최대 상승률 조절 (기본값: -100% ~ +100%)
 user_min_rate = st.sidebar.slider("최대 하락률 (%)", min_value=-100, max_value=-10, value=-100, step=5) / 100.0
-user_max_rate = st.sidebar.slider("최대 상승률 (%)", min_value=10, max_value=200, value=50, step=5) / 100.0
+user_max_rate = st.sidebar.slider("최대 상승률 (%)", min_value=10, max_value=200, value=100, step=5) / 100.0
 
 st.sidebar.divider()
-st.sidebar.info("💡 팁: 하락률을 -100%에 가깝게, 상승률을 낮게 설정할수록 부도가 자주 일어납니다!")
+st.sidebar.info("💡 팁: 슬라이더를 조절하여 게임 난이도를 실시간으로 변경해보세요!")
 
 # ---------------------------------------------------------
 # 4. 10초마다 실행되는 시세 및 이벤트 로직
@@ -87,11 +87,7 @@ def update_game_state():
             stocks.loc[symbol, "팀"] = assigned_team
             st.session_state.event_logs.append(f"🤝 [{symbol}] 이(가) {assigned_team} 동맹에 가입했습니다.")
 
-        # 가격 변동 범위 설정 (사용자 조절 값 연동)
-        # 1) 공격 성공 팀 버프 (3턴): +1% ~ +100%
-        # 2) 응원 버프 (3턴): -30% ~ +150%
-        # 3) 상위 10위 혜택: 하락폭은 사용자 설정의 절반(또는 최소값), 상승폭은 사용자 설정값
-        # 4) 일반 종목: 사용자 설정 min_rate ~ max_rate 적용
+        # 가격 변동 범위 설정
         if team_buff_turns > 0:
             min_rate, max_rate = 0.01, 1.0
             stocks.loc[symbol, "팀버프남은턴"] -= 1
@@ -273,7 +269,7 @@ with left_col:
                         st.session_state.stocks.loc[symbol, "보유수량"] -= qty
                         st.rerun()
                     else:
-                        st.warning("수량 부족")
+                        st.warning("보유 수량 부족")
             else:
                 c_cheer.write("-")
                 c_qty.write("-")
