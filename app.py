@@ -40,7 +40,20 @@ if "initialized" not in st.session_state:
     st.session_state.initialized = True
 
 # ---------------------------------------------------------
-# 3. 10초마다 실행되는 시세 및 이벤트 로직
+# 3. 사이드바: 게임 난이도(변동 확률) 조절 패널
+# ---------------------------------------------------------
+st.sidebar.header("⚙️ 게임 난이도 및 확률 조절")
+st.sidebar.caption("실시간으로 주가 변동 폭을 조절할 수 있습니다.")
+
+# 슬라이더로 최대 하락률, 최대 상승률 조절 (기본값: 하락 -100%, 상승 +50%)
+user_min_rate = st.sidebar.slider("최대 하락률 (%)", min_value=-100, max_value=-10, value=-100, step=5) / 100.0
+user_max_rate = st.sidebar.slider("최대 상승률 (%)", min_value=10, max_value=200, value=50, step=5) / 100.0
+
+st.sidebar.divider()
+st.sidebar.info("💡 팁: 하락률을 -100%에 가깝게, 상승률을 낮게 설정할수록 부도가 자주 일어납니다!")
+
+# ---------------------------------------------------------
+# 4. 10초마다 실행되는 시세 및 이벤트 로직
 # ---------------------------------------------------------
 def update_game_state():
     stocks = st.session_state.stocks
@@ -74,11 +87,11 @@ def update_game_state():
             stocks.loc[symbol, "팀"] = assigned_team
             st.session_state.event_logs.append(f"🤝 [{symbol}] 이(가) {assigned_team} 동맹에 가입했습니다.")
 
-        # 가격 변동 범위 설정
-        # 1) 공격 성공 팀 버프 적용 중 (3턴): +1% ~ +100%
-        # 2) 응원 버프 적용 중 (3턴): -30% ~ +150%
-        # 3) 상위 10위 혜택: -50% ~ +100%
-        # 4) 일반: -100% ~ +100%
+        # 가격 변동 범위 설정 (사용자 조절 값 연동)
+        # 1) 공격 성공 팀 버프 (3턴): +1% ~ +100%
+        # 2) 응원 버프 (3턴): -30% ~ +150%
+        # 3) 상위 10위 혜택: 하락폭은 사용자 설정의 절반(또는 최소값), 상승폭은 사용자 설정값
+        # 4) 일반 종목: 사용자 설정 min_rate ~ max_rate 적용
         if team_buff_turns > 0:
             min_rate, max_rate = 0.01, 1.0
             stocks.loc[symbol, "팀버프남은턴"] -= 1
@@ -86,9 +99,9 @@ def update_game_state():
             min_rate, max_rate = -0.3, 1.5
             stocks.loc[symbol, "응원남은턴"] -= 1
         elif is_top10:
-            min_rate, max_rate = -0.5, 1.0
+            min_rate, max_rate = max(user_min_rate, -0.5), user_max_rate
         else:
-            min_rate, max_rate = -1.0, 1.0
+            min_rate, max_rate = user_min_rate, user_max_rate
             
         change_rate = np.random.uniform(min_rate, max_rate)
         
@@ -111,12 +124,10 @@ def update_game_state():
         attacker = survivors.sample(1).index[0]
         attacker_team = stocks.loc[attacker, "팀"]
         
-        # 공격 팀의 인원수 계산
         team_member_count = 0
         if attacker_team != "무소속":
             team_member_count = len(survivors[survivors["팀"] == attacker_team])
             
-        # 기본 1%(0.01) + 팀원 수당 1%(인원수 * 0.01) 확률 계산
         attack_prob = 0.01 + (team_member_count * 0.01)
         
         if np.random.rand() < attack_prob:
@@ -125,17 +136,14 @@ def update_game_state():
                 possible_targets = possible_targets[possible_targets["팀"] != attacker_team]
                 
             if not possible_targets.empty:
-                # 자산 상위 종목 중 대상 선정
                 target = possible_targets.sort_values(by="현재가", ascending=False).iloc[0].name
                 
-                # 50% 확률로 공격 성공
                 if np.random.rand() < 0.5:
                     stocks.loc[target, "현재가"] = 0
                     stocks.loc[target, "파산여부"] = True
                     stocks.loc[target, "변동률(%)"] = -100.0
                     st.session_state.event_logs.append(f"⚔️ [{target}] 은(는) [{attacker_team if attacker_team != '무소속' else attacker}] 그룹의 공격을 받고 부도 되었습니다.")
                     
-                    # 공격 성공 팀 소속원 전체에게 3턴간 +1% ~ +100% 버프 부여
                     if attacker_team != "무소속":
                         team_members = stocks[(stocks["팀"] == attacker_team) & (~stocks["파산여부"])].index
                         stocks.loc[team_members, "팀버프남은턴"] = 3
@@ -149,10 +157,10 @@ def update_game_state():
 update_game_state()
 
 # ---------------------------------------------------------
-# 4. 화면 레이아웃 구성
+# 5. 화면 레이아웃 구성
 # ---------------------------------------------------------
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
-st.caption("⏱️ **10초마다** 시세가 변동합니다. 팀 인원수에 따라 부도 공격 확률이 증가하며, 공격 성공 팀은 3턴간 +1%~+100% 상승 버프를 받습니다.")
+st.caption(f"⏱️ **10초마다** 시세가 변동합니다. (현재 설정된 변동 폭: **{int(user_min_rate*100)}% ~ +{int(user_max_rate*100)}%**)")
 
 # 보유 자산 현황
 stocks_df = st.session_state.stocks
@@ -197,7 +205,6 @@ with left_col:
     
     sorted_stocks = stocks_df.sort_values(by="현재가", ascending=False)
     
-    # 일괄 거래 버튼
     b1, b2, _ = st.columns([1, 1, 2])
     with b1:
         if st.button("🚀 생존 종목 1주씩 일괄 매수"):
