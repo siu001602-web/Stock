@@ -174,17 +174,21 @@ st.divider()
 left_col, right_col = st.columns([3, 1])
 
 # ---------------------------------------------------------
-# [우측 컬럼] 사건 로그 및 TOP 5
+# [우측 컬럼] 팀 현황, TOP 5, 사건 로그
 # ---------------------------------------------------------
 with right_col:
-    st.subheader("📜 사건/사고 로그")
-    log_container = st.container(height=350)
-    with log_container:
-        for log in reversed(st.session_state.event_logs):
-            st.text(log)
+    st.subheader("🛡️ 팀별 생존 현황")
+    teams_list = ["🔴 Red", "🔵 Blue", "🟡 Yellow"]
+    for team in teams_list:
+        team_stocks = stocks_df[(stocks_df["팀"] == team) & (~stocks_df["파산여부"])]
+        st.markdown(f"**{team}** (생존: {len(team_stocks)}개)")
+        if not team_stocks.empty:
+            st.caption(", ".join(team_stocks.index.tolist()))
+        else:
+            st.caption("생존 기업 없음")
             
     st.divider()
-    
+
     st.subheader("🔥 상승률 TOP 5")
     top_5_up = stocks_df[~stocks_df["파산여부"]].sort_values(by="변동률(%)", ascending=False).head(5)
     for idx, row in top_5_up.iterrows():
@@ -192,6 +196,14 @@ with right_col:
         cheer_tag = "📣" if row["응원남은턴"] > 0 else ""
         tbuff_tag = "⚡" if row["팀버프남은턴"] > 0 else ""
         st.write(f"**{idx}** {team_tag}{cheer_tag}{tbuff_tag}: {int(row['현재가']):,}원 (`+{row['변동률(%)']}%`)")
+        
+    st.divider()
+
+    st.subheader("📜 사건/사고 로그")
+    log_container = st.container(height=250)
+    with log_container:
+        for log in reversed(st.session_state.event_logs):
+            st.text(log)
 
 # ---------------------------------------------------------
 # [좌측 컬럼] 주식 랭킹 순 표출 및 응원 / 매매 시스템
