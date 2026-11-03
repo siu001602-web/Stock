@@ -23,6 +23,7 @@ TEAMS_LIST = ["🔴 Red", "🔵 Blue", "🟡 Yellow", "🟢 Green", "🟣 Purple
 if "initialized" not in st.session_state:
     st.session_state.cash = INITIAL_CASH
     st.session_state.event_logs = []  # 직전 턴 사건/사고 로그
+    st.session_state.turn_bankruptcies = []  # 이번 턴에 부도난 기업 목록
     st.session_state.bankruptcy_tickets = 0  # 플레이어 보유 부도권 개수
     st.session_state.vaccines = 2  # 플레이어 보유 백신 개수
     
@@ -75,6 +76,11 @@ def bankruptcy_company(symbol, reason_msg, current_logs):
     stocks.loc[symbol, "현재가"] = 0
     stocks.loc[symbol, "파산여부"] = True
     stocks.loc[symbol, "변동률(%)"] = -100.0
+    
+    # 이번 턴 부도 목록에 추가
+    if symbol not in st.session_state.turn_bankruptcies:
+        st.session_state.turn_bankruptcies.append(symbol)
+        
     current_logs.append(f"💥 [종합 {current_rank}위] [{symbol}] {reason_msg}")
 
     # 물귀신 전략 (10%)
@@ -85,6 +91,10 @@ def bankruptcy_company(symbol, reason_msg, current_logs):
         stocks.loc[dragged_symbol, "현재가"] = 0
         stocks.loc[dragged_symbol, "파산여부"] = True
         stocks.loc[dragged_symbol, "변동률(%)"] = -100.0
+        
+        if dragged_symbol not in st.session_state.turn_bankruptcies:
+            st.session_state.turn_bankruptcies.append(dragged_symbol)
+            
         current_logs.append(f"👻 [물귀신 발동] [{symbol}]의 여파로 [종합 {dragged_rank}위] [{dragged_symbol}]이(가) 휘말려 동반 부도 처리되었습니다!")
 
     # 연쇄 부도 (도미노 감염) - 30% 확률
@@ -133,6 +143,9 @@ if st.sidebar.button("💉 백신 구매 (2,000,000원)"):
 def update_game_state():
     stocks = st.session_state.stocks
     current_turn_logs = []
+    
+    # 이번 턴 부도 목록 초기화 (새 턴 시작)
+    st.session_state.turn_bankruptcies = []
     
     rank_series = stocks["현재가"].rank(ascending=False, method="first")
     for symbol in stocks.index:
@@ -250,7 +263,6 @@ def update_game_state():
             bankruptcy_company(symbol, "갑작스러운 자금난으로 돌연 부도 처리되었습니다.", current_turn_logs)
             continue
 
-        # 팀 가입 확률 3% (0.03)으로 상향
         if stocks.loc[symbol, "팀"] == "무소속" and np.random.rand() < 0.03:
             assigned_team = random.choice(TEAMS_LIST)
             stocks.loc[symbol, "팀"] = assigned_team
@@ -367,6 +379,10 @@ m1.metric("보유 현금", f"{int(st.session_state.cash):,} 원")
 m2.metric("주식 평가금액", f"{int(total_stock_val):,} 원")
 m3.metric("총 자산", f"{int(total_assets):,} 원")
 m4.metric("생존 기업 수", f"{total_survivors} / 200")
+
+# --- [이번 턴 부도 기업 상단 별도 표시 영역] ---
+if st.session_state.turn_bankruptcies:
+    st.error(f"🚨 **[이번 턴 파산(부도) 발생 기업]**: {', '.join(st.session_state.turn_bankruptcies)}")
 
 st.divider()
 
