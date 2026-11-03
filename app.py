@@ -11,14 +11,14 @@ st.set_page_config(page_title="200개 종목 서바이벌 투자 시뮬레이션
 st_autorefresh(interval=10000, key="stock_survival_game_refresh")
 
 # ---------------------------------------------------------
-# 2. 세션 상태 (Session State) 초기화 및 7대 팀 구성
+# 2. 세션 상태 (Session State) 초기화 및 7대 팀 + 좀비 세력 구성
 # ---------------------------------------------------------
 NUM_STOCKS = 200
 INITIAL_PRICE = 100000
 INITIAL_CASH = 100000000  # 1억 원
 
-# 7개 팀 정의
-TEAMS_LIST = ["🔴 Red", "🔵 Blue", "🟡 Yellow", "🟢 Green", "🟣 Purple", "🩷 Pink", "🟠 Orange"]
+# 7개 팀 + 좀비 세력 정의
+TEAMS_LIST = ["🔴 Red", "🔵 Blue", "🟡 Yellow", "🟢 Green", "🟣 Purple", "🩷 Pink", "🟠 Orange", "🧟 Zombie"]
 
 if "initialized" not in st.session_state:
     st.session_state.cash = INITIAL_CASH
@@ -27,7 +27,7 @@ if "initialized" not in st.session_state:
     st.session_state.bankruptcy_tickets = 0  # 플레이어 보유 부도권 개수
     st.session_state.vaccines = 2  # 플레이어 보유 백신 개수
     
-    # 7개 팀 + 플레이어 부도 전과 초기화
+    # 팀별 부도 전과 초기화
     st.session_state.team_bankruptcy_counts = {team: 0 for team in TEAMS_LIST}
     st.session_state.team_bankruptcy_counts["플레이어"] = 0
     
@@ -77,7 +77,6 @@ def bankruptcy_company(symbol, reason_msg, current_logs):
     stocks.loc[symbol, "파산여부"] = True
     stocks.loc[symbol, "변동률(%)"] = -100.0
     
-    # 이번 턴 부도 목록에 추가
     if symbol not in st.session_state.turn_bankruptcies:
         st.session_state.turn_bankruptcies.append(symbol)
         
@@ -144,7 +143,6 @@ def update_game_state():
     stocks = st.session_state.stocks
     current_turn_logs = []
     
-    # 이번 턴 부도 목록 초기화 (새 턴 시작)
     st.session_state.turn_bankruptcies = []
     
     rank_series = stocks["현재가"].rank(ascending=False, method="first")
@@ -170,6 +168,43 @@ def update_game_state():
             stocks.loc[symbol, "감염남은턴"] = 0
         st.session_state.event_logs = current_turn_logs
         return
+
+    # --- [자율 AI 시스템 1: 팀 간 영토 전쟁 (10% 확률)] ---
+    active_teams = [t for t in TEAMS_LIST if len(stocks[(stocks["팀"] == t) & (~stocks["파산여부"])]) > 0]
+    if len(active_teams) >= 2 and np.random.rand() < 0.10:
+        t1, t2 = random.sample(active_teams, 2)
+        current_turn_logs.append(f"⚔️ [영토 전쟁 선포] [{t1}] 세력과 [{t2}] 세력 간의 피비린내 나는 시장 패권 전쟁이 발발했습니다!")
+
+    # --- [자율 AI 시스템 2: 무소속 독립 연합 결성 (5% 확률)] ---
+    unaffiliated = survivors[survivors["팀"] == "무소속"]
+    if len(unaffiliated) >= 10 and np.random.rand() < 0.05:
+        coalition_members = unaffiliated.sample(min(5, len(unaffiliated)))
+        stocks.loc[coalition_members.index, "팀버프남은턴"] = 2
+        current_turn_logs.append(f"✊ [무소속 독립 연합] 세력들의 횡포에 맞서 무소속 기업들 중 일부가 연합을 결성해 2턴간 방어 버프를 얻었습니다!")
+
+    # --- [자율 AI 시스템 3: 좀비 기업의 지하 부활 (2% 확률)] ---
+    dead_stocks = stocks[stocks["파산여부"]]
+    if not dead_stocks.empty and np.random.rand() < 0.02:
+        zombie_target = dead_stocks.sample(1).index[0]
+        stocks.loc[zombie_target, "파산여부"] = False
+        stocks.loc[zombie_target, "현재가"] = 15000.0
+        stocks.loc[zombie_target, "팀"] = "🧟 Zombie"
+        initial = stocks.loc[zombie_target, "초인가"]
+        stocks.loc[zombie_target, "변동률(%)"] = round(((15000.0 - initial) / initial) * 100, 2)
+        current_turn_logs.append(f"🧟 [좀비 기업 부활] 파산했던 [{zombie_target}]이(가) 어둠의 자금을 업고 '좀비 세력'으로 기사회생했습니다!")
+
+    # --- [자율 AI 시스템 4: 대기업의 문어발식 확장 / 자회사 상장 (1% 확률)] ---
+    top_survivors = survivors[survivors["이전순위"] <= 3]
+    if not top_survivors.empty and not dead_stocks.empty and np.random.rand() < 0.01:
+        parent = top_survivors.sample(1).index[0]
+        parent_team = stocks.loc[parent, "팀"]
+        subsidiary = dead_stocks.sample(1).index[0]
+        stocks.loc[subsidiary, "파산여부"] = False
+        stocks.loc[subsidiary, "현재가"] = 50000.0
+        stocks.loc[subsidiary, "팀"] = parent_team
+        initial = stocks.loc[subsidiary, "초인가"]
+        stocks.loc[subsidiary, "변동률(%)"] = round(((50000.0 - initial) / initial) * 100, 2)
+        current_turn_logs.append(f"🏢 [문어발식 확장] 상위 우량주 [{parent}]이(가) 자금을 투입해 폐업 부지를 인수, 자회사 [{subsidiary}]를 시장에 재상장시켰습니다!")
 
     # --- [블랙 바이러스 (2% 확률)] ---
     if len(survivors) >= 10 and np.random.rand() < 0.02:
@@ -263,8 +298,10 @@ def update_game_state():
             bankruptcy_company(symbol, "갑작스러운 자금난으로 돌연 부도 처리되었습니다.", current_turn_logs)
             continue
 
+        # 팀 가입 확률 3% (0.03) (좀비 세력은 제외하고 일반 7대 팀에만 가입)
+        normal_teams = TEAMS_LIST[:-1] # Zombie 제외
         if stocks.loc[symbol, "팀"] == "무소속" and np.random.rand() < 0.03:
-            assigned_team = random.choice(TEAMS_LIST)
+            assigned_team = random.choice(normal_teams)
             stocks.loc[symbol, "팀"] = assigned_team
             current_turn_logs.append(f"🤝 [{symbol}] 이(가) {assigned_team} 동맹에 가입했습니다.")
 
@@ -305,7 +342,7 @@ def update_game_state():
             initial = stocks.loc[symbol, "초인가"]
             stocks.loc[symbol, "변동률(%)"] = round(((new_price - initial) / initial) * 100, 2)
 
-    # --- [M&A 흡수 합병(Merge) 진화 시스템] ---
+    # --- [일반 M&A 공격 및 백기사 방어 시스템 (합병 기능 제거 버전)] ---
     survivors = stocks[~stocks["파산여부"]]
     for attacker in survivors.index:
         if stocks.loc[attacker, "파산여부"]:
@@ -326,38 +363,26 @@ def update_game_state():
             if not possible_targets.empty:
                 target = possible_targets.sort_values(by="현재가", ascending=False).iloc[0].name
                 target_rank = int(stocks.loc[target, "이전순위"])
-                target_price = stocks.loc[target, "현재가"]
                 
                 if stocks.loc[target, "보유수량"] > 0:
                     current_turn_logs.append(f"🛡️ [백기사 발동] 플레이어가 보유 중인 [{target}](종합 {target_rank}위)을(를) 보호하여 [{attacker}]의 적대적 M&A 공격을 완벽히 막아냈습니다!")
                 else:
                     if np.random.rand() < 0.5:
                         team_name_str = attacker_team if attacker_team != '무소속' else attacker
-                        
-                        absorbed_value = round(target_price * 0.5)
-                        bankruptcy_company(target, f"[{team_name_str}] 그룹의 적대적 M&A로 흡수합병되어 부도 처리되었습니다.", current_turn_logs)
+                        bankruptcy_company(target, f"[{team_name_str}] 그룹의 적대적 M&A 공격을 받고 부도 처리되었습니다.", current_turn_logs)
                         
                         if attacker_team in st.session_state.team_bankruptcy_counts:
                             st.session_state.team_bankruptcy_counts[attacker_team] += 1
                         
                         if attacker_team != "무소속":
                             team_members = stocks[(stocks["팀"] == attacker_team) & (~stocks["파산여부"])].index
-                            if len(team_members) > 0:
-                                boost_per_member = round(absorbed_value / len(team_members))
-                                for m in team_members:
-                                    stocks.loc[m, "현재가"] += boost_per_member
-                                    initial = stocks.loc[m, "초인가"]
-                                    stocks.loc[m, "변동률(%)"] = round(((stocks.loc[m, "현재가"] - initial) / initial) * 100, 2)
                             stocks.loc[team_members, "팀버프남은턴"] = 3
-                            current_turn_logs.append(f"🤝 [M&A 흡수합병 완료] [{attacker_team}] 팀이 [{target}]을(를) 강제 흡수하여 팀원 1인당 주가가 +{boost_per_member:,}원 상승했습니다!")
+                            current_turn_logs.append(f"🎉 [{attacker_team}] 팀이 부도 공격에 성공하여 3턴간 팀원 전원 상승 버프(+1%~+100%)를 받습니다!")
                         else:
-                            stocks.loc[attacker, "현재가"] += absorbed_value
-                            initial = stocks.loc[attacker, "초인가"]
-                            stocks.loc[attacker, "변동률(%)"] = round(((stocks.loc[attacker, "현재가"] - initial) / initial) * 100, 2)
                             stocks.loc[attacker, "팀버프남은턴"] = 3
-                            current_turn_logs.append(f"🤝 [M&A 흡수합병 완료] [{attacker}] 기업이 [{target}]을(를) 강제 흡수하여 주가가 +{absorbed_value:,}원 폭등했습니다!")
+                            current_turn_logs.append(f"🎉 [{attacker}] 기업이 부도 공격에 성공하여 3턴간 상승 버프(+1%~+100%)를 받습니다!")
                     else:
-                        current_turn_logs.append(f"🛡️ [{attacker}] 의 [{target}] 대상 부도 공격이 방어에 막혀 실패했습니다.")
+                        current_turn_logs.append(f"🛡️ [{attacker}] 의 [{target}] 대상 부도 공격이 방어벽에 막혀 실패했습니다.")
 
     st.session_state.event_logs = current_turn_logs
 
@@ -367,7 +392,7 @@ update_game_state()
 # 6. 화면 레이아웃 구성
 # ---------------------------------------------------------
 st.title("📈 200개 종목 서바이벌 투자 시뮬레이션")
-st.caption("⏱️ **10초마다** 시세 변동! (7대 팀 세력전, 도미노 감염, M&A 흡수합병 활성화)")
+st.caption("⏱️ **10초마다** 시세 변동! (AI 영토전쟁, 좀비 부활, 자회사 분할, 7대 팀 세력전 활성화)")
 
 stocks_df = st.session_state.stocks
 total_survivors = len(stocks_df[~stocks_df['파산여부']])
@@ -389,10 +414,10 @@ st.divider()
 left_col, right_col = st.columns([3, 1])
 
 # ---------------------------------------------------------
-# [우측 컬럼] 7대 팀 현황, 부도 전과 랭킹, TOP 5, 사건 로그
+# [우측 컬럼] 팀 현황, 부도 전과 랭킹, TOP 5, 사건 로그
 # ---------------------------------------------------------
 with right_col:
-    st.subheader("🛡️ 7대 팀별 생존 현황")
+    st.subheader("🛡️ 팀별 생존 현황")
     for team in TEAMS_LIST:
         team_stocks = stocks_df[(stocks_df["팀"] == team) & (~stocks_df["파산여부"])]
         st.markdown(f"**{team}** (생존: {len(team_stocks)}개)")
